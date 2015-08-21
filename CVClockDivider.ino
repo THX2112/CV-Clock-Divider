@@ -13,8 +13,6 @@
 *
 */
 
-//#include <digitalWriteFast.h>
-
 // Pins:
 
 int tempoPot = A1;
@@ -35,9 +33,11 @@ unsigned long periodStartTime = 0;	//	microseconds
 unsigned long periodEndTime = 0;	//	microseconds
 bool trigState = LOW;
 bool lastTrigState = LOW;
-bool ResetState = LOW;
+bool resetState = LOW;
 bool lastResetState = LOW;
-unsigned long duration;	//	microseconds
+bool startState = LOW;
+bool lastStartState = LOW;
+unsigned long duration;				//	microseconds
 bool isHit = false;
 unsigned long beginTime;
 unsigned long now;
@@ -56,6 +56,11 @@ void setup()
 	pinMode(resetPin, INPUT);
 	pinMode(clockPin, INPUT);
 
+	// Flash LED to show we're alive.
+	digitalWrite(out, HIGH);
+	delay(100);
+	digitalWrite(out, LOW);
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -67,7 +72,7 @@ void loop()
 {
 	checkTrigger();
 
-	if (isHit && startPin)		//  Start on rising edge of clock pulse if STARTPIN is high.
+	if (isHit && startState)		//  Start on rising edge of clock pulse if STARTPIN is high.
 	{
 		hitIt();
 	}
@@ -87,11 +92,18 @@ void checkTrigger()
 
 	trigState = digitalRead(clockPin);
 	resetState = digitalRead(resetPin);
+	startState = digitalRead(startPin);
 
 	if (resetState == HIGH && lastResetState == LOW)	//	Reset clock if reset pin pulled high
 	{
 		clockPulse = 0;
 		lastResetState = HIGH;
+	}
+
+	if (startState == HIGH && lastStartState == LOW)	//	Reset clock if this is first new START
+	{
+		clockPulse = 0;
+		lastStartState = HIGH;
 	}
 
 	if ((trigState == HIGH) && (lastTrigState == LOW))	//	If a new clock is detected...
@@ -105,7 +117,7 @@ void checkTrigger()
 
 		previousPulse = currentPulse;
 
-		if (clockPulse > 95)	//	Clocks start at zero.
+		if (clockPulse > 95)	//	Clocks start at zero. Sync 24 = 24ppqn = 96 pulses per bar.
 		{
 			clockPulse = 0;
 		}
@@ -118,11 +130,12 @@ void checkTrigger()
 
 		potMap = map(tempoValue, 0, 1023, 8, 0);	// Reverse response of pot and map to X values
 
-		//if (potMap == 9) { clockDivMult = 64; }	//	1.5 Causes uneven beats due to retriggering at end of 96-tick bar. Fix?	
 		if (potMap == 8) { clockDivMult = 96; }		//	1	Every bar.
+		//if (potMap == 9) { clockDivMult = 64; }	//	1.5 Causes uneven beats due to retriggering at end of 96-tick bar. Fix?	
 		if (potMap == 7) { clockDivMult = 48; }		//	2	half
 		//if (potMap == 7) { clockDivMult = 32; }	//	3	third. Causes uneven beats due to retriggering at end of 96-tick bar. Fix? Could fix by doubling/quadrupling/etc 96-tick counter...
 		if (potMap == 6) { clockDivMult = 24; }		//	4	quarter
+		//if (potMap == 7) { clockDivMult = 16; }	//	6	 
 		if (potMap == 5) { clockDivMult = 12; }		//	8th note -- default setting
 		if (potMap == 4) { clockDivMult = 6; }		//	16th notes
 		if (potMap == 3) { clockDivMult = 4; }		//	24	fast
@@ -143,6 +156,8 @@ void checkTrigger()
 		clockPulse++;
 	}
 
+	//	Reset state toggles
+
 	if ((trigState == LOW) && (lastTrigState == HIGH))
 	{
 		lastTrigState = LOW;
@@ -151,6 +166,11 @@ void checkTrigger()
 	if ((resetState == LOW) && (lastResetState == HIGH))
 	{
 		lastResetState = LOW;
+	}
+
+	if ((startState == LOW) && (lastStartState == HIGH))
+	{
+		lastStartState = LOW;
 	}
 
 }
