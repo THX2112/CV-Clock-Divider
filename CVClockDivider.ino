@@ -26,6 +26,7 @@ int potMap;
 int clockDivMult;
 int bounceTimer = 0;
 int lastBounceTime = 0;
+int i = 0;
 unsigned long timeoutTimer = 0;		//	microseconds
 unsigned long previousPulse = 0;	//	microseconds
 unsigned long currentPulse = 0;		//	microseconds
@@ -46,7 +47,7 @@ unsigned long now;
 
 ///////////////////////////////////////////////////////////////////////////////
 //
-//	Setup pins.  
+//	Setup pins.
 //
 
 void setup()
@@ -61,6 +62,8 @@ void setup()
 	delay(100);
 	digitalWrite(out, LOW);
 
+	getTempo(); // Prime the pump.
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -71,11 +74,6 @@ void setup()
 void loop()
 {
 	checkTrigger();
-
-	if (isHit && startState)		//  Start on rising edge of clock pulse if STARTPIN is high.
-	{
-		hitIt();
-	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -98,69 +96,53 @@ void checkTrigger()
 	{
 		clockPulse = 0;
 		lastResetState = HIGH;
+		getTempo();
+		isHit = true;	//	All hits start on downbeat. Prevents skipping the first hit after a start or reset
 	}
 
 	if (startState == HIGH && lastStartState == LOW)	//	Reset clock if this is first new START
 	{
 		clockPulse = 0;
 		lastStartState = HIGH;
+		getTempo();
+		isHit = true;	//	All hits start on downbeat. Prevents skipping the first hit after a start or reset
 	}
 
 	if ((trigState == HIGH) && (lastTrigState == LOW))	//	If a new clock is detected...
 	{
-		currentPulse = millis();
+		clockPulse++;
 
-		if ((currentPulse - previousPulse) > 100)		//	Reset clock pulse if clock stops to start on the first clock
+		if (clockPulse > 96)	//	Clocks start at one. Sync 24 = 24ppqn = 96 pulses per bar.
 		{
-			clockPulse = 0;
-		}
-
-		previousPulse = currentPulse;
-
-		if (clockPulse > 95)	//	Clocks start at zero. Sync 24 = 24ppqn = 96 pulses per bar.
-		{
-			clockPulse = 0;
+			clockPulse = 1;
 		}
 
 		//
-		//	Set division
+		//	Send the hit if it's time and START is held high. This is done here to minimize latency.
 		//
 
-		tempoValue = analogRead(tempoPot);
-
-		potMap = map(tempoValue, 0, 1023, 8, 0);	// Reverse response of pot and map to X values
-
-		if (potMap == 8) { clockDivMult = 96; }		//	1	Every bar.
-		//if (potMap == 9) { clockDivMult = 64; }	//	1.5 Causes uneven beats due to retriggering at end of 96-tick bar. Fix?	
-		if (potMap == 7) { clockDivMult = 48; }		//	2	half
-		//if (potMap == 7) { clockDivMult = 32; }	//	3	third. Causes uneven beats due to retriggering at end of 96-tick bar. Fix? Could fix by doubling/quadrupling/etc 96-tick counter...
-		if (potMap == 6) { clockDivMult = 24; }		//	4	quarter
-		//if (potMap == 7) { clockDivMult = 16; }	//	6	 
-		if (potMap == 5) { clockDivMult = 12; }		//	8th note -- default setting
-		if (potMap == 4) { clockDivMult = 6; }		//	16th notes
-		if (potMap == 3) { clockDivMult = 4; }		//	24	fast
-		if (potMap == 2) { clockDivMult = 3; }		//	32	really really fast
-		if (potMap == 1) { clockDivMult = 2; }		//	64	something is going to break
-		if (potMap == 0) { clockDivMult = 1; }		//	96	every 24ppqm clock tick (may fracture spacetime.)
-
-		//
-		//	Check if it's time to send a hit
-		//
-
-		if ((clockPulse % clockDivMult == 0))
+		if (isHit)
 		{
-			isHit = true;
+			if (startState)
+			{
+				hitIt();
+			}
 		}
 
 		lastTrigState = HIGH;
-		clockPulse++;
 	}
 
-	//	Reset state toggles
+	//
+	//	Reset state toggles.
+	//
 
-	if ((trigState == LOW) && (lastTrigState == HIGH))
+	if ((trigState == LOW) && (lastTrigState == HIGH))	//	This is a good place for time consuming code like maths.
+		getTempo();		//	This is slow so do this here while nothing important is being done.
 	{
+
 		lastTrigState = LOW;
+		checkNextHit();				//	Check if next clock will be a hit here to reduce latency.
+
 	}
 
 	if ((resetState == LOW) && (lastResetState == HIGH))
@@ -182,38 +164,91 @@ void checkTrigger()
 
 void hitIt()
 {
+	digitalWrite(out, HIGH);	//	Rising edge of new output clock.
 	isHit = false;				//	Reset.
 	beginTime = micros();
 	now = 0;
-	duration = 5000;			// pulse duration in microseconds. 5000us = 5ms
+	duration = 5000;			//	Pulse duration in microseconds. 5000us = 5ms
+
+	clockPulse = 0;				//	Each pulse restarts clock.
 
 	//
-	//	Loop until the end of DURATION. 
+	//	Loop until the end of DURATION.
 	//
 
 	while (now < duration)
 	{
-		digitalWrite(out, HIGH);
+		//
+		//	Set division here for reduced latency
+		//
 
-		//	Check if timing is changed during a pulse.
+		getTempo();
+
+
 		//
 		//	Don't reset isHit so that same clock pulse can be used to set up next clock in checkTrigger function.
 		//
 
-		checkTrigger();
-		if (isHit)
-		{
-			break;
-		}
 
 		now = (micros() - beginTime);	//	Register time for next run through.
 	}
 
 	//
-	//	Clean up at end of hit. 
+	//	Clean up at end of pulse.
 	//
 
-	digitalWrite(out, LOW);
+	digitalWrite(out, LOW);	//	Falling edge of new clock.
+
+}
+
+
+//
+//	Set division
+//
+
+int getTempo()
+{
+
+	tempoValue = analogRead(tempoPot);		//	Slow.
+
+	potMap = map(tempoValue, 0, 1023, 11, 0);	// Reverse response of pot and map to X values
+
+	if (potMap == 11) { clockDivMult = 96; }	//	1	Every bar.
+	if (potMap == 10) { clockDivMult = 64; }	//	1.5 Causes uneven beats due to retriggering at end of 96-tick bar. (FIXED)
+	if (potMap == 9) { clockDivMult = 48; }		//	2	half
+	if (potMap == 8) { clockDivMult = 32; }		//	3	third. Causes uneven beats due to retriggering at end of 96-tick bar. (FIXED)
+	if (potMap == 7) { clockDivMult = 24; }		//	4	quarter
+	if (potMap == 6) { clockDivMult = 16; }		//	6
+	if (potMap == 5) { clockDivMult = 12; }		//	8th note -- default setting
+	if (potMap == 4) { clockDivMult = 6; }		//	16th notes
+	if (potMap == 3) { clockDivMult = 4; }		//	24	fast
+	if (potMap == 2) { clockDivMult = 3; }		//	32	really really fast
+	if (potMap == 1) { clockDivMult = 2; }		//	64	something is going to break
+	if (potMap == 0) { clockDivMult = 1; }		//	96	every 24ppqm clock tick (may fracture spacetime.)
+
+	//checkHit();
+
+	return clockDivMult; // Return isHit?
+
+}
+
+void checkHit()
+{
+
+	if ((clockPulse % clockDivMult == 0))	//	Slow.
+	{
+		isHit = true;
+	}
+
+}
+
+void checkNextHit()
+{
+
+	if (((clockPulse + 1) % clockDivMult == 0))	//	Slow.
+	{
+		isHit = true;
+	}
 
 }
 
